@@ -142,6 +142,9 @@ let isRecording = false;
 let finalTranscript = '';
 let interimTranscript = '';
 let shouldContinue = false;
+let recognitionBaseTranscript = '';
+let sessionResults = [];
+let restartTimer = null;
 
 const textoEl = document.getElementById('texto');
 const recBtn = document.getElementById('recBtn');
@@ -174,6 +177,10 @@ function initRecognition(){
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+        recognitionBaseTranscript = finalTranscript;
+        sessionResults = [];
         isRecording = true;
         dot.classList.add('rec');
         recBtn.classList.add('rec');
@@ -183,15 +190,18 @@ function initRecognition(){
     };
 
     recognition.onresult = (event) => {
-        interimTranscript = '';
-        for(let i = event.resultIndex; i < event.results.length; i++){
-            const transcript = event.results[i][0].transcript;
-            if(event.results[i].isFinal){
-                finalTranscript += transcript + ' ';
-            } else {
-                interimTranscript += transcript;
-            }
-        }
+        sessionResults = Array.from(event.results, result => ({
+            transcript: result[0].transcript,
+            isFinal: result.isFinal
+        }));
+        finalTranscript = recognitionBaseTranscript + sessionResults
+            .filter(result => result.isFinal)
+            .map(result => result.transcript + ' ')
+            .join('');
+        interimTranscript = sessionResults
+            .filter(result => !result.isFinal)
+            .map(result => result.transcript)
+            .join('');
         renderText();
         updateCounts();
     };
@@ -201,6 +211,7 @@ function initRecognition(){
         if(e.error === 'no-speech'){
             statusText.textContent = 'Não ouvi nada, continue falando...';
         } else {
+            shouldContinue = false;
             statusText.textContent = 'Erro: ' + e.error;
         }
     };
@@ -211,7 +222,11 @@ function initRecognition(){
         recBtn.classList.remove('rec');
         recBtn.textContent = shouldContinue? '🔴 Continuar gravando' : '🔴 Começar a gravar';
 
-        if(finalTranscript.trim().length > 0){
+        interimTranscript = '';
+        renderText();
+        updateCounts();
+
+        if(!shouldContinue && finalTranscript.trim().length > 0){
             // Copia automaticamente para área de transferência
             navigator.clipboard.writeText(finalTranscript.trim()).then(()=>{
                 showToast('✅ Texto copiado para área de transferência!');
@@ -220,13 +235,18 @@ function initRecognition(){
                 statusText.textContent = 'Parado • Pronto para copiar';
                 showToast('Gravação finalizada');
             });
-        } else {
+        } else if(!shouldContinue) {
             statusText.textContent = 'Parado';
         }
 
-        // Se foi parado sem querer, e usuário quer continuar, reinicia
-        if(shouldContinue && finalTranscript){
-            setTimeout(()=>{ try{ recognition.start(); }catch{} }, 300);
+        if(shouldContinue){
+            clearTimeout(restartTimer);
+            restartTimer = setTimeout(()=>{
+                restartTimer = null;
+                if(shouldContinue && !isRecording){
+                    try{ recognition.start(); }catch{}
+                }
+            }, 300);
         }
     };
 }
@@ -257,6 +277,7 @@ recBtn.onclick = () => {
 
     if(isRecording){
         shouldContinue = false;
+        clearTimeout(restartTimer);
         recognition.stop();
     } else {
         // Se já tem texto, entra em modo continuar (mantém o que tem)
@@ -264,6 +285,7 @@ recBtn.onclick = () => {
             finalTranscript = textoEl.innerText + ' ';
         }
         shouldContinue = true;
+        clearTimeout(restartTimer);
         try{
             recognition.start();
         }catch(e){
@@ -276,9 +298,12 @@ recBtn.onclick = () => {
 // Continuar transcrição
 document.getElementById('continueBtn').onclick = () => {
     if(!recognition) initRecognition();
-    finalTranscript = textoEl.innerText.trim() + ' ';
+    if(!isRecording){
+        finalTranscript = textoEl.innerText.trim();
+    }
     shouldContinue = true;
     if(!isRecording){
+        clearTimeout(restartTimer);
         try{ recognition.start(); }catch{}
     }
     textoEl.focus();
@@ -294,6 +319,7 @@ document.getElementById('clearBtn').onclick = () => {
         updateCounts();
         if(isRecording){
             shouldContinue = false;
+            clearTimeout(restartTimer);
             recognition.stop();
         }
         showToast('Texto limpo');
