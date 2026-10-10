@@ -198,7 +198,6 @@ function initRecognition(){
             .filter(result => result.isFinal)
             .map(result => result.transcript + ' ')
             .join('');
-        interimTranscript = '';
         interimTranscript = sessionResults
             .filter(result => !result.isFinal)
             .map(result => result.transcript)
@@ -212,6 +211,7 @@ function initRecognition(){
         if(e.error === 'no-speech'){
             statusText.textContent = 'Não ouvi nada, continue falando...';
         } else {
+            shouldContinue = false;
             statusText.textContent = 'Erro: ' + e.error;
         }
     };
