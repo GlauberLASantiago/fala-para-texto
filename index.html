@@ -143,8 +143,10 @@ let finalTranscript = '';
 let interimTranscript = '';
 let shouldContinue = false;
 let recognitionBaseTranscript = '';
-let sessionResults = [];
 let restartTimer = null;
+
+// No celular o modo "continuous" do Chrome repete frases. Lá usamos frase a frase + reinício automático.
+const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
 const textoEl = document.getElementById('texto');
 const recBtn = document.getElementById('recBtn');
@@ -168,11 +170,43 @@ function checkSupport(){
 
 const SpeechRecognition = checkSupport();
 
+// Junta pedaços de texto sem repetir quando um resultado já contém o anterior
+function mergeSegments(segments){
+    let out = '';
+    for(const raw of segments){
+        const t = raw.trim();
+        if(!t) continue;
+        if(!out){ out = t; continue; }
+        const o = out.toLowerCase();
+        const n = t.toLowerCase();
+        if(n.startsWith(o)){
+            out = t;                    // resultado cumulativo: substitui
+        } else if(o.endsWith(n) || o.includes(n)){
+            continue;                   // repetição: ignora
+        } else {
+            // sobreposição parcial no fim/início (ex.: "tudo bem" + "bem como vai")
+            let overlap = 0;
+            const max = Math.min(o.length, n.length);
+            for(let k = max; k > 2; k--){
+                if(o.endsWith(n.slice(0, k))){ overlap = k; break; }
+            }
+            out = overlap ? out + t.slice(overlap) : out + ' ' + t;
+        }
+    }
+    return out;
+}
+
+function joinBase(base, add){
+    if(!add) return base;
+    if(base && !/\s$/.test(base)) base += ' ';
+    return base + add;
+}
+
 function initRecognition(){
     if(!SpeechRecognition) return;
     recognition = new SpeechRecognition();
     recognition.lang = 'pt-BR';
-    recognition.continuous = true;
+    recognition.continuous = !IS_MOBILE;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
@@ -180,28 +214,34 @@ function initRecognition(){
         clearTimeout(restartTimer);
         restartTimer = null;
         recognitionBaseTranscript = finalTranscript;
-        sessionResults = [];
         isRecording = true;
         dot.classList.add('rec');
         recBtn.classList.add('rec');
         recBtn.textContent = '⏹️ Parar e copiar';
         statusText.textContent = 'Ouvindo... fale agora';
-        showToast('Gravando...');
     };
 
     recognition.onresult = (event) => {
-        sessionResults = Array.from(event.results, result => ({
-            transcript: result[0].transcript,
-            isFinal: result.isFinal
-        }));
-        finalTranscript = recognitionBaseTranscript + sessionResults
-            .filter(result => result.isFinal)
-            .map(result => result.transcript + ' ')
-            .join('');
-        interimTranscript = sessionResults
-            .filter(result => !result.isFinal)
-            .map(result => result.transcript)
-            .join('');
+        const finals = [];
+        const interims = [];
+        for(let i = 0; i < event.results.length; i++){
+            const r = event.results[i];
+            (r.isFinal ? finals : interims).push(r[0].transcript);
+        }
+        const finalText = mergeSegments(finals);
+        let interimText = mergeSegments(interims);
+
+        // Se o provisório repete o que já é final, mostra só o que for novo
+        if(finalText && interimText){
+            const f = finalText.toLowerCase();
+            const it = interimText.toLowerCase();
+            if(it.startsWith(f)) interimText = interimText.slice(finalText.length).trim();
+            else if(f.endsWith(it)) interimText = '';
+        }
+
+        finalTranscript = joinBase(recognitionBaseTranscript, finalText);
+        if(finalText) finalTranscript += ' ';
+        interimTranscript = interimText;
         renderText();
         updateCounts();
     };
@@ -210,6 +250,8 @@ function initRecognition(){
         console.error(e);
         if(e.error === 'no-speech'){
             statusText.textContent = 'Não ouvi nada, continue falando...';
+        } else if(e.error === 'aborted'){
+            // ignorar
         } else {
             shouldContinue = false;
             statusText.textContent = 'Erro: ' + e.error;
@@ -220,24 +262,14 @@ function initRecognition(){
         isRecording = false;
         dot.classList.remove('rec');
         recBtn.classList.remove('rec');
-        recBtn.textContent = shouldContinue? '🔴 Continuar gravando' : '🔴 Começar a gravar';
 
+        // Se terminou com texto provisório, aproveita como final (evita perder a última frase)
+        if(interimTranscript.trim()){
+            finalTranscript = joinBase(finalTranscript.trimEnd(), interimTranscript.trim()) + ' ';
+        }
         interimTranscript = '';
         renderText();
         updateCounts();
-
-        if(!shouldContinue && finalTranscript.trim().length > 0){
-            // Copia automaticamente para área de transferência
-            navigator.clipboard.writeText(finalTranscript.trim()).then(()=>{
-                showToast('✅ Texto copiado para área de transferência!');
-                statusText.textContent = 'Parado • Texto copiado ✓';
-            }).catch(()=>{
-                statusText.textContent = 'Parado • Pronto para copiar';
-                showToast('Gravação finalizada');
-            });
-        } else if(!shouldContinue) {
-            statusText.textContent = 'Parado';
-        }
 
         if(shouldContinue){
             clearTimeout(restartTimer);
@@ -246,7 +278,21 @@ function initRecognition(){
                 if(shouldContinue && !isRecording){
                     try{ recognition.start(); }catch{}
                 }
-            }, 300);
+            }, 250);
+            return;
+        }
+
+        recBtn.textContent = '🔴 Começar a gravar';
+        if(finalTranscript.trim().length > 0){
+            navigator.clipboard.writeText(finalTranscript.trim()).then(()=>{
+                showToast('✅ Texto copiado para área de transferência!');
+                statusText.textContent = 'Parado • Texto copiado ✓';
+            }).catch(()=>{
+                statusText.textContent = 'Parado • Pronto para copiar';
+                showToast('Gravação finalizada');
+            });
+        } else {
+            statusText.textContent = 'Parado';
         }
     };
 }
@@ -255,7 +301,6 @@ function renderText(){
     const finalEscaped = escapeHtml(finalTranscript);
     const interimEscaped = escapeHtml(interimTranscript);
     textoEl.innerHTML = finalEscaped + (interimEscaped? `<span class="interim">${interimEscaped}</span>` : '');
-    // Mantém scroll no final
     textoEl.scrollTop = textoEl.scrollHeight;
 }
 
@@ -275,22 +320,25 @@ function updateCounts(){
 recBtn.onclick = () => {
     if(!recognition) initRecognition();
 
-    if(isRecording){
+    if(isRecording || shouldContinue){
         shouldContinue = false;
         clearTimeout(restartTimer);
-        recognition.stop();
-    } else {
-        // Se já tem texto, entra em modo continuar (mantém o que tem)
-        if(textoEl.innerText.trim().length > 0 && finalTranscript === ''){
-            finalTranscript = textoEl.innerText + ' ';
+        if(isRecording){
+            recognition.stop();
+        } else {
+            recBtn.textContent = '🔴 Começar a gravar';
+            statusText.textContent = 'Parado';
         }
+    } else {
+        // Mantém o texto que já existe na caixa
+        finalTranscript = textoEl.innerText.trim();
+        if(finalTranscript) finalTranscript += ' ';
         shouldContinue = true;
         clearTimeout(restartTimer);
         try{
             recognition.start();
         }catch(e){
-            // já está rodando
-            recognition.stop();
+            console.error(e);
         }
     }
 };
@@ -298,30 +346,30 @@ recBtn.onclick = () => {
 // Continuar transcrição
 document.getElementById('continueBtn').onclick = () => {
     if(!recognition) initRecognition();
-    if(!isRecording){
-        finalTranscript = textoEl.innerText.trim();
+    if(isRecording){
+        showToast('Já está gravando');
+        return;
     }
+    finalTranscript = textoEl.innerText.trim();
+    if(finalTranscript) finalTranscript += ' ';
     shouldContinue = true;
-    if(!isRecording){
-        clearTimeout(restartTimer);
-        try{ recognition.start(); }catch{}
-    }
-    textoEl.focus();
+    clearTimeout(restartTimer);
+    try{ recognition.start(); }catch{}
     showToast('Continuando a partir do texto atual...');
 };
 
 // Limpar
 document.getElementById('clearBtn').onclick = () => {
     if(confirm('Limpar todo o texto?')){
+        shouldContinue = false;
+        clearTimeout(restartTimer);
+        if(isRecording) recognition.abort();
         finalTranscript = '';
         interimTranscript = '';
+        recognitionBaseTranscript = '';
         textoEl.innerHTML = '';
         updateCounts();
-        if(isRecording){
-            shouldContinue = false;
-            clearTimeout(restartTimer);
-            recognition.stop();
-        }
+        statusText.textContent = 'Pronto para gravar';
         showToast('Texto limpo');
     }
 };
@@ -330,8 +378,12 @@ document.getElementById('clearBtn').onclick = () => {
 document.getElementById('copyBtn').onclick = async () => {
     const text = textoEl.innerText.trim();
     if(!text) return showToast('Nada para copiar');
-    await navigator.clipboard.writeText(text);
-    showToast('✅ Copiado!');
+    try{
+        await navigator.clipboard.writeText(text);
+        showToast('✅ Copiado!');
+    }catch{
+        showToast('Não foi possível copiar');
+    }
 };
 
 // Salvar TXT
@@ -348,9 +400,12 @@ document.getElementById('saveBtn').onclick = () => {
     showToast('Arquivo.txt baixado');
 };
 
-// Permitir edição manual sincronizar com finalTranscript
+// Edição manual sincroniza com o texto base (só quando não está gravando)
 textoEl.addEventListener('input', ()=>{
-    finalTranscript = textoEl.innerText;
+    if(!isRecording){
+        finalTranscript = textoEl.innerText;
+        recognitionBaseTranscript = finalTranscript;
+    }
     updateCounts();
 });
 
