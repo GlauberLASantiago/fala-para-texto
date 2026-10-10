@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Transcritor PT-BR</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#f8fafc;
+    color:#0f172a;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+}
+header{
+    background:white;
+    border-bottom:1px solid #e2e8f0;
+    padding:16px 20px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    position:sticky;
+    top:0;
+    z-index:10;
+}
+header h1{font-size:18px;font-weight:800;letter-spacing:-0.5px}
+header span{font-size:11px;background:#dcfce7;color:#166534;padding:4px 8px;border-radius:20px;font-weight:700}
+main{max-width:720px;width:100%;margin:0 auto;padding:16px;flex:1;display:flex;flex-direction:column;gap:14px}
+.status{
+    background:white;
+    border:1px solid #e2e8f0;
+    border-radius:12px;
+    padding:12px 16px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:13px;
+    color:#64748b;
+}
+.dot{width:10px;height:10px;border-radius:50%;background:#cbd5e1;transition:all 0.2s}
+.dot.rec{background:#ef4444;box-shadow:0 0 0 6px rgba(239,68,68,0.2);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}
+#texto{
+    flex:1;
+    background:white;
+    border:1px solid #e2e8f0;
+    border-radius:16px;
+    padding:18px;
+    min-height:50vh;
+    font-size:17px;
+    line-height:1.7;
+    outline:none;
+    white-space:pre-wrap;
+    word-wrap:break-word;
+    overflow-y:auto;
+}
+#texto:empty:before{
+    content:'Seu texto transcrito vai aparecer aqui...';
+    color:#94a3b8;
+}
+.interim{color:#94a3b8;font-style:italic}
+.toolbar{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+}
+.btn{
+    padding:14px 16px;
+    border-radius:12px;
+    border:none;
+    font-weight:700;
+    font-size:15px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    transition:transform 0.1s;
+}
+.btn:active{transform:scale(0.97)}
+.btn-primary{background:#111827;color:white;grid-column: span 2;padding:18px;font-size:17px}
+.btn-primary.rec{background:#ef4444}
+.btn-ghost{background:white;border:1px solid #e2e8f0;color:#334155}
+.btn-dark{background:#0f172a;color:white}
+.toast{
+    position:fixed;
+    bottom:20px;
+    left:50%;
+    transform:translateX(-50%);
+    background:#0f172a;
+    color:white;
+    padding:12px 18px;
+    border-radius:10px;
+    font-size:13px;
+    font-weight:600;
+    opacity:0;
+    pointer-events:none;
+    transition:all 0.3s;
+    z-index:100;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.counter{font-size:11px;color:#64748b;text-align:right;margin-top:-6px}
+</style>
+</head>
+<body>
+<header>
+    <h1>🎙️ Transcritor PT-BR</h1>
+    <span id="browserCheck">Chrome ✓</span>
+</header>
+
+<main>
+    <div class="status">
+        <div class="dot" id="dot"></div>
+        <div id="statusText">Pronto para gravar</div>
+        <div style="margin-left:auto;font-size:11px" id="lang">pt-BR • Google</div>
+    </div>
+
+    <div id="texto" contenteditable="true" spellcheck="false"></div>
+    <div class="counter"><span id="charCount">0</span> caracteres • <span id="wordCount">0</span> palavras</div>
+
+    <button class="btn btn-primary" id="recBtn">🔴 Começar a gravar</button>
+
+    <div class="toolbar">
+        <button class="btn btn-ghost" id="continueBtn">▶️ Continuar</button>
+        <button class="btn btn-ghost" id="clearBtn">🗑️ Limpar</button>
+        <button class="btn btn-ghost" id="copyBtn">📋 Copiar</button>
+        <button class="btn btn-dark" id="saveBtn">💾 Salvar.txt</button>
+    </div>
+
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px;font-size:12px;color:#92400e;line-height:1.5">
+        💡 <b>Dica:</b> Use no <b>Google Chrome</b> no celular ou PC. Fale de forma natural. O app copia automaticamente ao parar. Para continuar, use o botão "Continuar" que ele mantém o texto.
+    </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let recognition = null;
+let isRecording = false;
+let finalTranscript = '';
+let interimTranscript = '';
+let shouldContinue = false;
+
+const textoEl = document.getElementById('texto');
+const recBtn = document.getElementById('recBtn');
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+const charCount = document.getElementById('charCount');
+const wordCount = document.getElementById('wordCount');
+
+function checkSupport(){
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if(!SpeechRecognition){
+        document.getElementById('browserCheck').textContent = 'Não suportado';
+        document.getElementById('browserCheck').style.background = '#fee2e2';
+        document.getElementById('browserCheck').style.color = '#991b1b';
+        statusText.textContent = 'Abra este arquivo no Google Chrome';
+        recBtn.disabled = true;
+        return null;
+    }
+    return SpeechRecognition;
+}
+
+const SpeechRecognition = checkSupport();
+
+function initRecognition(){
+    if(!SpeechRecognition) return;
+    recognition = new SpeechRecognition();
+    recognition.lang = 'pt-BR';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+        isRecording = true;
+        dot.classList.add('rec');
+        recBtn.classList.add('rec');
+        recBtn.textContent = '⏹️ Parar e copiar';
+        statusText.textContent = 'Ouvindo... fale agora';
+        showToast('Gravando...');
+    };
+
+    recognition.onresult = (event) => {
+        interimTranscript = '';
+        for(let i = event.resultIndex; i < event.results.length; i++){
+            const transcript = event.results[i][0].transcript;
+            if(event.results[i].isFinal){
+                finalTranscript += transcript + ' ';
+            } else {
+                interimTranscript += transcript;
+            }
+        }
+        renderText();
+        updateCounts();
+    };
+
+    recognition.onerror = (e) => {
+        console.error(e);
+        if(e.error === 'no-speech'){
+            statusText.textContent = 'Não ouvi nada, continue falando...';
+        } else {
+            statusText.textContent = 'Erro: ' + e.error;
+        }
+    };
+
+    recognition.onend = () => {
+        isRecording = false;
+        dot.classList.remove('rec');
+        recBtn.classList.remove('rec');
+        recBtn.textContent = shouldContinue? '🔴 Continuar gravando' : '🔴 Começar a gravar';
+
+        if(finalTranscript.trim().length > 0){
+            // Copia automaticamente para área de transferência
+            navigator.clipboard.writeText(finalTranscript.trim()).then(()=>{
+                showToast('✅ Texto copiado para área de transferência!');
+                statusText.textContent = 'Parado • Texto copiado ✓';
+            }).catch(()=>{
+                statusText.textContent = 'Parado • Pronto para copiar';
+                showToast('Gravação finalizada');
+            });
+        } else {
+            statusText.textContent = 'Parado';
+        }
+
+        // Se foi parado sem querer, e usuário quer continuar, reinicia
+        if(shouldContinue && finalTranscript){
+            setTimeout(()=>{ try{ recognition.start(); }catch{} }, 300);
+        }
+    };
+}
+
+function renderText(){
+    const finalEscaped = escapeHtml(finalTranscript);
+    const interimEscaped = escapeHtml(interimTranscript);
+    textoEl.innerHTML = finalEscaped + (interimEscaped? `<span class="interim">${interimEscaped}</span>` : '');
+    // Mantém scroll no final
+    textoEl.scrollTop = textoEl.scrollHeight;
+}
+
+function escapeHtml(text){
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function updateCounts(){
+    const text = finalTranscript + interimTranscript;
+    charCount.textContent = text.length;
+    wordCount.textContent = text.trim()? text.trim().split(/\s+/).length : 0;
+}
+
+// Botão principal
+recBtn.onclick = () => {
+    if(!recognition) initRecognition();
+
+    if(isRecording){
+        shouldContinue = false;
+        recognition.stop();
+    } else {
+        // Se já tem texto, entra em modo continuar (mantém o que tem)
+        if(textoEl.innerText.trim().length > 0 && finalTranscript === ''){
+            finalTranscript = textoEl.innerText + ' ';
+        }
+        shouldContinue = true;
+        try{
+            recognition.start();
+        }catch(e){
+            // já está rodando
+            recognition.stop();
+        }
+    }
+};
+
+// Continuar transcrição
+document.getElementById('continueBtn').onclick = () => {
+    if(!recognition) initRecognition();
+    finalTranscript = textoEl.innerText.trim() + ' ';
+    shouldContinue = true;
+    if(!isRecording){
+        try{ recognition.start(); }catch{}
+    }
+    textoEl.focus();
+    showToast('Continuando a partir do texto atual...');
+};
+
+// Limpar
+document.getElementById('clearBtn').onclick = () => {
+    if(confirm('Limpar todo o texto?')){
+        finalTranscript = '';
+        interimTranscript = '';
+        textoEl.innerHTML = '';
+        updateCounts();
+        if(isRecording){
+            shouldContinue = false;
+            recognition.stop();
+        }
+        showToast('Texto limpo');
+    }
+};
+
+// Copiar manual
+document.getElementById('copyBtn').onclick = async () => {
+    const text = textoEl.innerText.trim();
+    if(!text) return showToast('Nada para copiar');
+    await navigator.clipboard.writeText(text);
+    showToast('✅ Copiado!');
+};
+
+// Salvar TXT
+document.getElementById('saveBtn').onclick = () => {
+    const text = textoEl.innerText.trim();
+    if(!text) return showToast('Nada para salvar');
+    const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcricao-${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Arquivo.txt baixado');
+};
+
+// Permitir edição manual sincronizar com finalTranscript
+textoEl.addEventListener('input', ()=>{
+    finalTranscript = textoEl.innerText;
+    updateCounts();
+});
+
+function showToast(msg){
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(()=>toast.classList.remove('show'), 2500);
+}
+
+// Inicializa
+initRecognition();
+updateCounts();
+</script>
+</body>
+</html>
