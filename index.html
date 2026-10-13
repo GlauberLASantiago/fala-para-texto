@@ -193,8 +193,8 @@ function checkSupport(){
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if(!SpeechRecognition){
         document.getElementById('browserCheck').textContent = 'Não suportado';
-        document.getElementById('browserCheck').style.background = '#E8AE4C';
-        document.getElementById('browserCheck').style.color = '#2E2A40';
+        document.getElementById('browserCheck').style.background = '#E9C46A';
+        document.getElementById('browserCheck').style.color = '#264653';
         statusText.textContent = 'Abra este arquivo no Google Chrome';
         recBtn.disabled = true;
         return null;
